@@ -1,0 +1,20 @@
+{
+  "name": "outline-bridge",
+  "version": "0.7.1",
+  "private": true,
+  "description": "Bridge + CLI to operate the review.newidea.pro outline workbench via js-eyes",
+  "main": "outline-cli.js",
+  "bin": {
+    "outline-cli": "./outline-cli.js"
+  },
+  "scripts": {
+    "doctor": "node outline-cli.js doctor",
+    "tree": "node outline-cli.js tree"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "@js-eyes/client-sdk": "*"
+  }
+}
