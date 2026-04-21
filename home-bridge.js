@@ -9,11 +9,16 @@
  * - 提供轻量视觉反馈
  */
 ;(() => {
-  const VERSION = '0.1.0';
+  const VERSION = '0.2.0';
 
   const PRIMARY_ACTIONS = [
     { id: 'resume-local', label: '继续编辑本地文档' },
     { id: 'generate-outline', label: '生成提纲' },
+  ];
+  const GENERATE_MODES = [
+    { id: 'short', label: '短篇' },
+    { id: 'medium', label: '中篇' },
+    { id: 'long', label: '长篇' },
   ];
 
   const VISUAL_DEFAULTS = {
@@ -265,6 +270,46 @@
     return document.querySelector('textarea');
   }
 
+  function listModeCards() {
+    return Array.from(document.querySelectorAll('div')).filter((el) => {
+      const cls = el.className || '';
+      return cls.includes('w-[10.625rem]') && cls.includes('h-[5.75rem]');
+    });
+  }
+
+  function isModeCardSelected(el) {
+    const cls = el?.className || '';
+    return cls.includes('border-primary') || cls.includes('bg-gradient-to-b') || cls.includes('from-[#FFF9EA]');
+  }
+
+  function snapshotModes() {
+    const cards = listModeCards();
+    return GENERATE_MODES.map((mode, index) => {
+      const el = cards[index];
+      return {
+        id: mode.id,
+        label: mode.label,
+        visible: !!el && isVisible(el),
+        selected: !!el && isModeCardSelected(el),
+      };
+    });
+  }
+
+  function normalizeMode(input) {
+    const raw = String(input || '').trim().toLowerCase();
+    if (!raw) return null;
+    return GENERATE_MODES.find((mode) =>
+      mode.id === raw ||
+      mode.label === input ||
+      (raw === 'mid' && mode.id === 'medium') ||
+      (raw === 'middle' && mode.id === 'medium')
+    ) || null;
+  }
+
+  function selectedMode() {
+    return snapshotModes().find((mode) => mode.selected) || null;
+  }
+
   function getTopicValue() {
     return getTopicTextarea()?.value || '';
   }
@@ -314,6 +359,7 @@
       xrayAvailable: typeof (document.documentElement && document.documentElement.wrappedJSObject) !== 'undefined',
       topicValue: summarizeText(getTopicValue(), 160),
       topicLength: getTopicValue().length,
+      generateModes: snapshotModes(),
       primaryActions: snapshotPrimaryActions(),
     });
   }
@@ -325,7 +371,34 @@
       pathname: location.pathname,
       topicValue: summarizeText(getTopicValue(), 160),
       topicLength: getTopicValue().length,
+      generateModes: snapshotModes(),
       primaryActions: snapshotPrimaryActions(),
+    });
+  }
+
+  async function setMode(input) {
+    if (location.pathname !== '/home') {
+      return err('E_UI_MISMATCH', '当前不在 /home 页面');
+    }
+    const mode = normalizeMode(input);
+    if (!mode) {
+      return err('E_BAD_ARG', `只接受这些生成模式：${GENERATE_MODES.map((item) => item.label).join(' / ')}`);
+    }
+    const cards = listModeCards();
+    const target = cards[GENERATE_MODES.findIndex((item) => item.id === mode.id)];
+    if (!target || !isVisible(target)) {
+      return err('E_NOT_FOUND', `未找到模式卡片"${mode.label}"`);
+    }
+    target.click();
+    for (let i = 0; i < 12; i++) {
+      await sleep(80);
+      const current = selectedMode();
+      if (current && current.id === mode.id) break;
+    }
+    return ok({
+      mode: mode.id,
+      label: mode.label,
+      generateModes: snapshotModes(),
     });
   }
 
@@ -374,18 +447,24 @@
       return err('E_DISABLED', `按钮"${normalized.label}"当前 disabled`);
     }
     const onClick = getReactOnClick(hit.button);
-    if (!onClick) {
-      return err('E_FIBER', `按钮"${normalized.label}"缺少 React onClick`);
-    }
     const textarea = getTopicTextarea();
     const requestedTopic = options && typeof options === 'object' && typeof options.topic === 'string'
       ? options.topic
+      : null;
+    const requestedMode = options && typeof options === 'object' && typeof options.mode === 'string'
+      ? options.mode
       : null;
     if (requestedTopic != null && textarea) {
       setTextareaValue(textarea, requestedTopic);
       await sleep(80);
     }
+    if (requestedMode != null) {
+      const modeResult = await setMode(requestedMode);
+      if (!modeResult.ok) return modeResult;
+      await sleep(80);
+    }
     const effectiveTopic = getTopicValue();
+    const effectiveMode = selectedMode();
     if (normalized.id === 'generate-outline' && !effectiveTopic.trim()) {
       return err('E_BAD_ARG', '生成提纲前需要提供主题文本，或先在页面中填写综述主题');
     }
@@ -400,31 +479,46 @@
       element: hit.button,
       tone: 'pending',
       badge: `正在点击：${normalized.label}`,
-      detail: normalized.id === 'generate-outline' ? summarizeText(effectiveTopic, 120) : '',
+      detail: normalized.id === 'generate-outline'
+        ? [effectiveMode ? `模式: ${effectiveMode.label}` : '', summarizeText(effectiveTopic, 120)].filter(Boolean).join(' · ')
+        : '',
     });
 
     const beforeUrl = location.href;
     const beforePath = location.pathname;
     const beforeTitle = document.title;
-    const evt = {
-      preventDefault: () => {},
-      stopPropagation: () => {},
-      nativeEvent: { preventDefault: () => {}, stopPropagation: () => {} },
-      currentTarget: hit.button,
-      target: hit.button,
-      type: 'click',
-      bubbles: true,
-      defaultPrevented: false,
-      isDefaultPrevented: () => false,
-      isPropagationStopped: () => false,
-    };
-    onClick(evt);
+    if (normalized.id === 'generate-outline' && typeof hit.button.click === 'function') {
+      hit.button.click();
+    } else if (onClick) {
+      const evt = {
+        preventDefault: () => {},
+        stopPropagation: () => {},
+        nativeEvent: { preventDefault: () => {}, stopPropagation: () => {} },
+        currentTarget: hit.button,
+        target: hit.button,
+        type: 'click',
+        bubbles: true,
+        defaultPrevented: false,
+        isDefaultPrevented: () => false,
+        isPropagationStopped: () => false,
+      };
+      onClick(evt);
+    } else if (typeof hit.button.click === 'function') {
+      hit.button.click();
+    } else {
+      return err('E_FIBER', `按钮"${normalized.label}"缺少可用点击处理器`);
+    }
 
     let afterUrl = location.href;
     let afterPath = location.pathname;
     let afterTitle = document.title;
     let changed = afterUrl !== beforeUrl || afterPath !== beforePath || afterTitle !== beforeTitle;
-    for (let i = 0; i < 40 && !changed; i++) {
+    const maxChecks = effectiveMode && effectiveMode.id === 'long'
+      ? 140
+      : effectiveMode && effectiveMode.id === 'medium'
+        ? 80
+        : 40;
+    for (let i = 0; i < maxChecks && !changed; i++) {
       await sleep(150);
       afterUrl = location.href;
       afterPath = location.pathname;
@@ -456,11 +550,14 @@
       afterUrl,
       beforePath,
       afterPath,
+      mode: effectiveMode ? effectiveMode.id : '',
+      modeLabel: effectiveMode ? effectiveMode.label : '',
       topicValue: normalized.id === 'generate-outline' ? summarizeText(effectiveTopic, 160) : '',
       urlChanged: afterUrl !== beforeUrl,
       pathChanged: afterPath !== beforePath,
       titleChanged: afterTitle !== beforeTitle,
       verified,
+      generateModes: snapshotModes(),
       primaryActions: currentActions,
     });
   }
@@ -470,6 +567,7 @@
     probe,
     state,
     setVisualOptions,
+    setMode,
     setTopic,
     clickPrimary,
     __meta: { version: VERSION, loadedAt: new Date().toISOString() },

@@ -1,6 +1,6 @@
-# Probe Notes — `review.newidea.pro/outline`
+# Outline Probe Notes — `review.newidea.pro/outline`
 
-本文件记录阶段 0 的只读侦察结果，供 `outline-bridge.js` / `outline-cli.js` 实装时参照。**选择器常量在本文件第 3 节已冻结**。
+本文件记录 `/outline` 页面的只读侦察结果，供 `outline-bridge.js` / `review-cli.js` 实装时参照。它不是整个项目的总览文档；`/home` 相关能力请看 `home-bridge.js` 和 `README.md`。**选择器常量在本文件第 3 节已冻结**。
 
 ---
 
@@ -16,7 +16,7 @@
 
 ## 2. 结构速览
 
-```
+```text
 <body>
 ├─ <header>            4-step 进度条（STEP 2 当前）
 ├─ main 内容（不用管）
@@ -43,7 +43,7 @@ const SEL = {
   tree:         '.rc-tree.outline-tree[role="tree"]',
   node:         '.rc-tree-treenode',
   nodeFilter:   n => (n.getAttribute('aria-hidden') || 'false') !== 'true'
-                     && n.getBoundingClientRect().height > 0,
+                    && n.getBoundingClientRect().height > 0,
   indentUnit:   ':scope > .rc-tree-indent > .rc-tree-indent-unit',
   switcher:     ':scope > .rc-tree-switcher',
   switcherOpen: 'rc-tree-switcher_open',
@@ -65,6 +65,7 @@ const SEL = {
 ```
 
 CTA 文本常量：
+
 ```js
 const CTA = ['返回首页', '下载提纲', '生成全文'];
 const EDITOR_CTA = ['一键生成', '一键复制', '替换原文'];
@@ -73,7 +74,7 @@ const EDITOR_CTA = ['一键生成', '一键复制', '替换原文'];
 ## 4. 节点层级与按钮分布（实测）
 
 | depth | 节点数 | 字重 class | 悬停按钮数 | 例文 |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | 0 | 1 | `font-bold` | 1 | 星形胶质细胞与神经元沟通中的G蛋白偶联受体：机制、功能与治疗前景综述 |
 | 1 | 8 | `font-medium` | 3 | 摘要：/ 前言：/ ... |
 | 2 | 20 | 默认 | 3 | 段落标题或段落正文 |
@@ -128,6 +129,7 @@ const EDITOR_CTA = ['一键生成', '一键复制', '替换原文'];
 3. **shadcn 按钮"替换原文"**：在编辑态下通过 `.click()` 点击，编辑器不关闭。更有甚者，按钮的 `disabled=true` 属性由 Slate 的 React 内部状态驱动，**只有真实用户在编辑器里输入（trusted input）才会把按钮解禁**，程序化 `beforeinput` 虽然改了 DOM 的 textContent，却无法让 React 状态同步 → 按钮依然 disabled → `.click()` 无效。
 
 **`execCommand` / `beforeinput` 输入尝试**：
+
 - `document.execCommand('selectAll')` 在该 contenteditable 上返回 `false`，无效。
 - `document.execCommand('insertText', ...)` 亦不改变 DOM。
 - `InputEvent('beforeinput', {inputType:'insertText', data:'...'})` 确实追加 text 到 DOM，但不走 Slate 的 React model，按钮仍 disabled。
@@ -135,6 +137,7 @@ const EDITOR_CTA = ['一键生成', '一键复制', '替换原文'];
 **键盘关闭编辑器尝试**（Escape / Enter / Ctrl+Enter / blur）：全部无效。
 
 **结论**：
+
 - 本桥接脚本**不能完全自动化写操作**。
 - Phase 2 最多做到"半自动"：`beginEdit(path)` 双击打开编辑器 + `awaitEditClosed({timeout})` 轮询等待用户在真实浏览器中手动点击"替换原文"。
 - `rename(path, text)` / `editBody(path, text)` 由于无法靠程序让"替换原文"按钮可点，只能返回 `E_NEEDS_MANUAL` + 明确提示用户。
@@ -149,7 +152,7 @@ const EDITOR_CTA = ['一键生成', '一键复制', '替换原文'];
 ## 9b. 关键 CTA 按钮点击现状（Phase 3） — [已推翻 2026-04-21，见 §12]
 
 | 按钮 | 是否 Radix | `.click()` 可用？ | 说明 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `返回首页` | 否（shadcn） | 未测（破坏性） | 预期不可用，参考"替换原文" |
 | `下载提纲` | 否（shadcn） | 未测 | 预期不可用 |
 | `生成全文` | 否（shadcn） | 未测（高破坏性） | 预期不可用 |
@@ -197,7 +200,7 @@ const EDITOR_CTA = ['一键生成', '一键复制', '替换原文'];
 在任意 rc-tree 节点 `.rc-tree-treenode` 的 label `<div class="cursor-pointer">` 上拿 `__reactFiber$`，沿 `.return` 向上 30 层左右会命中一个组件（源码里代号 `Z`），它的 `memoizedProps` 上挂：
 
 | prop | 签名 | 效果 |
-|---|---|---|
+| --- | --- | --- |
 | `item` | `{ key, title, children }` | 当前节点在 React 数据模型里的对象 |
 | `onEditNode(newNodes, key)` | 用 `newNodes` 数组替换 `key` 指向的节点及其子树 | rename / editBody / addChild / addSibling 全部通过它实现（改 children 数组后回写父节点） |
 | `onAddChildNode(key)` | 插入一个空子节点并进入编辑态 | 当前不使用（bridge 选择直接用 `onEditNode` 重写 children 以便一步到位写入文本，避免二次提交） |
@@ -208,7 +211,7 @@ const EDITOR_CTA = ['一键生成', '一键复制', '替换原文'];
 
 ### 12.3 Z 组件的查找协议（bridge 里的 `pwFindZ`）
 
-```
+```text
 content-script:
   1. 扫 DOM 取到 path=a.b.c 的 .rc-tree-treenode
   2. setAttribute('data-jse-op', randomToken)   (唯一标记)
@@ -245,7 +248,7 @@ content-script:
 
 本页 rc-tree 根组件的 props（在 fiber depth 23 处观测）包含 `expandedKeys`（22 项）但 **没有 `onExpand` 回调**：
 
-```
+```text
 allKeys: ['selectable','showIcon','draggable','onDrop','expandedKeys','dropIndicatorRender','treeData',
   'className','prefixCls','showLine','multiple','checkable','disabled','checkStrictly',
   'defaultExpandParent','autoExpandParent','defaultExpandAll','defaultExpandedKeys',

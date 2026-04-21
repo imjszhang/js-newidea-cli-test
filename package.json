@@ -1,15 +1,15 @@
 {
-  "name": "outline-bridge",
+  "name": "review-bridge-cli",
   "version": "0.7.1",
   "private": true,
-  "description": "Bridge + CLI to operate the review.newidea.pro outline workbench via pluggable browser drivers",
-  "main": "outline-cli.js",
+  "description": "Bridge + CLI to operate review.newidea.pro home/outline workbenches via pluggable browser drivers",
+  "main": "review-cli.js",
   "bin": {
-    "outline-cli": "./outline-cli.js"
+    "review-cli": "./review-cli.js"
   },
   "scripts": {
-    "doctor": "node outline-cli.js doctor",
-    "tree": "node outline-cli.js tree"
+    "doctor": "node review-cli.js doctor",
+    "tree": "node review-cli.js tree"
   },
   "engines": {
     "node": ">=22.0.0"
