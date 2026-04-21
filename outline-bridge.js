@@ -20,7 +20,7 @@
  * 所有 API 返回形状统一：{ok, data?, code?, message?}；bridge 本身返 JSON string。
  */
 ;(() => {
-  const VERSION = '0.7.2';
+  const VERSION = '0.8.0';
 
   const SEL = {
     tree: '.rc-tree.outline-tree[role="tree"]',
@@ -39,6 +39,7 @@
   const VISUAL_DEFAULTS = {
     enabled: false,
     durationMs: 420,
+    detailLevel: 'staged',
   };
   const VISUAL_STYLE_ID = '__jse_visual_style__';
   const VISUAL_LAYER_ID = '__jse_visual_layer__';
@@ -52,6 +53,12 @@
   const visualState = {
     config: { ...VISUAL_DEFAULTS },
     hudTimer: null,
+  };
+  const VISUAL_STAGE_COPY = {
+    locate: '已定位',
+    execute: '执行中',
+    respond: '页面已响应',
+    verify: '已验证',
   };
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -68,11 +75,17 @@
     return clamp(Math.round(n), 120, 4000);
   }
 
+  function normalizeDetailLevel(value, fallback = VISUAL_DEFAULTS.detailLevel) {
+    if (value === 'compact' || value === 'staged') return value;
+    return fallback;
+  }
+
   function normalizeVisualOptions(options = {}) {
     const base = { ...visualState.config };
     if (!options || typeof options !== 'object') return base;
     if (typeof options.enabled === 'boolean') base.enabled = options.enabled;
     if (options.durationMs != null) base.durationMs = normalizeDuration(options.durationMs, base.durationMs);
+    if (options.detailLevel != null) base.detailLevel = normalizeDetailLevel(options.detailLevel, base.detailLevel);
     return base;
   }
 
@@ -94,6 +107,26 @@
           box-sizing:border-box;
           border-radius:8px;
           animation:__jse_visual_pulse .55s ease-out 1;
+        }
+        .__jse_visual_relation{
+          position:fixed;
+          inset:0;
+          animation:__jse_visual_pulse .55s ease-out 1;
+        }
+        .__jse_visual_line{
+          position:absolute;
+          height:2px;
+          transform-origin:left center;
+          box-shadow:0 0 0 1px currentColor, 0 8px 24px currentColor;
+          opacity:.9;
+        }
+        .__jse_visual_dot{
+          position:absolute;
+          width:10px;
+          height:10px;
+          border-radius:999px;
+          transform:translate(-50%, -50%);
+          box-shadow:0 0 0 2px rgba(255,255,255,.65);
         }
         .__jse_visual_badge{
           position:absolute;
@@ -141,6 +174,49 @@
     return VISUAL_TONE_MAP[tone] || VISUAL_TONE_MAP.info;
   }
 
+  function isStagedVisual() {
+    return visualState.config.detailLevel !== 'compact';
+  }
+
+  function stageDuration(stage, fallback = visualState.config.durationMs) {
+    const base = normalizeDuration(fallback, visualState.config.durationMs);
+    if (stage === 'locate') return clamp(Math.round(base * 0.75), 120, 4000);
+    if (stage === 'respond') return clamp(Math.round(base * 0.9), 120, 4000);
+    if (stage === 'verify') return clamp(Math.round(base * 1.05), 120, 4000);
+    return base;
+  }
+
+  function hudDuration(stage, fallback = visualState.config.durationMs) {
+    return Math.max(900, stageDuration(stage, fallback) * 2);
+  }
+
+  function summarizeText(text, max = 88) {
+    if (text == null) return '';
+    const clean = String(text).replace(/\s+/g, ' ').trim();
+    if (!clean) return '';
+    return clean.length > max ? clean.slice(0, max - 1) + '…' : clean;
+  }
+
+  function joinParts(parts) {
+    return parts.filter(Boolean).join(' · ');
+  }
+
+  function nodeVisualAnchor(nodeEl) {
+    if (!nodeEl) return null;
+    return nodeEl.querySelector(SEL.label) || nodeEl;
+  }
+
+  function relationPoint(el, side = 'center') {
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+    if (side === 'left') return { x: rect.left, y: rect.top + rect.height / 2 };
+    if (side === 'right') return { x: rect.right, y: rect.top + rect.height / 2 };
+    if (side === 'top') return { x: rect.left + rect.width / 2, y: rect.top };
+    if (side === 'bottom') return { x: rect.left + rect.width / 2, y: rect.bottom };
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  }
+
   function removeLater(el, durationMs) {
     if (!el) return;
     const ms = normalizeDuration(durationMs);
@@ -179,6 +255,55 @@
     return true;
   }
 
+  function flashRelation(fromEl, toEl, { tone = 'info', label = '', durationMs, fromSide = 'right', toSide = 'left' } = {}) {
+    if (!fromEl || !toEl || !visualState.config.enabled || !isStagedVisual()) return false;
+    const start = relationPoint(fromEl, fromSide);
+    const end = relationPoint(toEl, toSide);
+    if (!start || !end) return false;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const length = Math.sqrt(dx * dx + dy * dy);
+    if (!Number.isFinite(length) || length < 24) return false;
+    const layer = ensureVisualRoot();
+    const spec = toneSpec(tone);
+    const group = document.createElement('div');
+    group.className = '__jse_visual_relation';
+    const line = document.createElement('div');
+    line.className = '__jse_visual_line';
+    line.style.left = `${start.x}px`;
+    line.style.top = `${start.y}px`;
+    line.style.width = `${length}px`;
+    line.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+    line.style.color = spec.border;
+    line.style.background = spec.border;
+    group.appendChild(line);
+
+    for (const point of [start, end]) {
+      const dot = document.createElement('div');
+      dot.className = '__jse_visual_dot';
+      dot.style.left = `${point.x}px`;
+      dot.style.top = `${point.y}px`;
+      dot.style.background = spec.border;
+      group.appendChild(dot);
+    }
+
+    if (label) {
+      const badge = document.createElement('div');
+      badge.className = '__jse_visual_badge';
+      badge.textContent = label;
+      badge.style.background = spec.pill;
+      badge.style.color = spec.text;
+      badge.style.left = `${start.x + dx / 2}px`;
+      badge.style.top = `${start.y + dy / 2 - 34}px`;
+      badge.style.transform = 'translateX(-50%)';
+      group.appendChild(badge);
+    }
+
+    layer.appendChild(group);
+    removeLater(group, durationMs);
+    return true;
+  }
+
   function showHud({ action = '', target = '', status = 'pending', detail = '', durationMs } = {}) {
     if (!visualState.config.enabled) return false;
     const layer = ensureVisualRoot();
@@ -209,12 +334,117 @@
     const layer = document.getElementById(VISUAL_LAYER_ID);
     if (!layer) return;
     Array.from(layer.querySelectorAll('.__jse_visual_box')).forEach((el) => el.remove());
+    Array.from(layer.querySelectorAll('.__jse_visual_relation')).forEach((el) => el.remove());
     const hud = document.getElementById(VISUAL_HUD_ID);
     if (hud) hud.remove();
     if (visualState.hudTimer) {
       clearTimeout(visualState.hudTimer);
       visualState.hudTimer = null;
     }
+  }
+
+  function announceStage({
+    action,
+    stage,
+    tone = 'info',
+    element = null,
+    badge = '',
+    target = '',
+    detail = '',
+    inset = 0,
+    durationMs,
+    relation = null,
+  } = {}) {
+    if (!visualState.config.enabled) return false;
+    const stageName = VISUAL_STAGE_COPY[stage] || '';
+    if (!isStagedVisual() && stage === 'locate') return false;
+    const finalDuration = stageDuration(stage, durationMs);
+    if (element) {
+      flashElement(element, {
+        tone,
+        label: badge || stageName,
+        durationMs: finalDuration,
+        inset,
+      });
+    }
+    if (relation && relation.from && relation.to) {
+      flashRelation(relation.from, relation.to, {
+        tone,
+        label: relation.label || '',
+        durationMs: finalDuration,
+        fromSide: relation.fromSide,
+        toSide: relation.toSide,
+      });
+    }
+    showHud({
+      action: joinParts([action, isStagedVisual() ? stageName : '']),
+      target,
+      status: tone,
+      detail,
+      durationMs: hudDuration(stage, durationMs),
+    });
+    return true;
+  }
+
+  function createVisualFlow(action, { target = '', detail = '' } = {}) {
+    return {
+      locate(opts = {}) {
+        return announceStage({
+          action,
+          stage: 'locate',
+          target,
+          detail: opts.detail != null ? opts.detail : detail,
+          tone: opts.tone || 'info',
+          badge: opts.badge || '已定位',
+          element: opts.element || null,
+          inset: opts.inset || 0,
+          relation: opts.relation || null,
+          durationMs: opts.durationMs,
+        });
+      },
+      execute(opts = {}) {
+        return announceStage({
+          action,
+          stage: 'execute',
+          target: opts.target != null ? opts.target : target,
+          detail: opts.detail != null ? opts.detail : detail,
+          tone: opts.tone || 'pending',
+          badge: opts.badge || '执行中',
+          element: opts.element || null,
+          inset: opts.inset || 0,
+          relation: opts.relation || null,
+          durationMs: opts.durationMs,
+        });
+      },
+      respond(opts = {}) {
+        return announceStage({
+          action,
+          stage: 'respond',
+          target: opts.target != null ? opts.target : target,
+          detail: opts.detail != null ? opts.detail : detail,
+          tone: opts.tone || 'info',
+          badge: opts.badge || '页面已响应',
+          element: opts.element || null,
+          inset: opts.inset || 0,
+          relation: opts.relation || null,
+          durationMs: opts.durationMs,
+        });
+      },
+      verify(opts = {}) {
+        return announceStage({
+          action,
+          stage: 'verify',
+          target: opts.target != null ? opts.target : target,
+          detail: opts.detail != null ? opts.detail : detail,
+          tone: opts.tone || 'success',
+          badge: opts.badge || '已验证',
+          element: opts.element || null,
+          inset: opts.inset || 0,
+          relation: opts.relation || null,
+          durationMs: opts.durationMs,
+        });
+      },
+    };
   }
 
   function isVisible(el) {
@@ -503,6 +733,21 @@
     const { hit, error } = getNodeByPath(path);
     if (!hit) return error;
     hit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
+    const flow = createVisualFlow('scroll-to', {
+      target: path,
+      detail: summarizeText(hit.text || ''),
+    });
+    flow.locate({
+      element: nodeVisualAnchor(hit._node),
+      badge: '已滚动到目标',
+      durationMs: 520,
+    });
+    flow.verify({
+      element: nodeVisualAnchor(hit._node),
+      badge: '位置已确认',
+      tone: 'info',
+      durationMs: 620,
+    });
     return ok({ path });
   }
 
@@ -528,12 +773,20 @@
     if (typeof text !== 'string') return err('E_BAD_ARG', 'text 需为字符串');
     const { hit, error } = getNodeByPath(path);
     if (!hit) return error;
-    hit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
-    flashElement(hit._node.querySelector(SEL.label) || hit._node, {
-      tone: 'pending',
-      label: '正在重命名',
+    const anchor = nodeVisualAnchor(hit._node);
+    const beforeText = summarizeText(hit.text || '');
+    const afterText = summarizeText(text);
+    const flow = createVisualFlow('rename', {
+      target: path,
+      detail: joinParts([beforeText && `原文: ${beforeText}`, afterText && `新文: ${afterText}`]),
     });
-    showHud({ action: 'rename', target: path, status: 'pending', detail: text });
+    hit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
+    flow.locate({ element: anchor });
+    flow.execute({
+      element: anchor,
+      badge: '正在替换文本',
+      detail: joinParts([beforeText && `原文: ${beforeText}`, afterText && `新文: ${afterText}`]),
+    });
     const token = tag(hit._node);
     const textLit = JSON.stringify(text);
     try {
@@ -547,12 +800,18 @@
       await sleep(120);
       const afterHit = getNodeByPath(path).hit;
       if (afterHit) {
-        flashElement(afterHit._node.querySelector(SEL.label) || afterHit._node, {
-          tone: 'success',
-          label: '已重命名',
+        const afterAnchor = nodeVisualAnchor(afterHit._node);
+        flow.respond({
+          element: afterAnchor,
+          badge: '文本已回填',
+          detail: joinParts([beforeText && `原文: ${beforeText}`, afterText && `新文: ${afterText}`]),
+        });
+        flow.verify({
+          element: afterAnchor,
+          badge: '原位置已替换',
+          detail: afterText || '(空)',
         });
       }
-      showHud({ action: 'rename', target: path, status: 'success', detail: text });
       return ok({ path, before: res.before, after: res.after });
     } finally { untag(hit._node); }
   }
@@ -565,12 +824,22 @@
     if (text != null && typeof text !== 'string') return err('E_BAD_ARG', 'text 需为字符串或省略');
     const { hit, error } = getNodeByPath(path);
     if (!hit) return error;
-    hit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
-    flashElement(hit._node.querySelector(SEL.label) || hit._node, {
-      tone: 'pending',
-      label: '正在添加子节点',
+    const parentAnchor = nodeVisualAnchor(hit._node);
+    const detail = summarizeText(text || '(空)');
+    const flow = createVisualFlow('add-child', {
+      target: path,
+      detail,
     });
-    showHud({ action: 'add-child', target: path, status: 'pending', detail: text || '(空)' });
+    hit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
+    flow.locate({
+      element: parentAnchor,
+      badge: '父节点已定位',
+    });
+    flow.execute({
+      element: parentAnchor,
+      badge: '正在添加子节点',
+      detail: joinParts(['父节点', detail]),
+    });
     const token = tag(hit._node);
     try {
       const res = await runInPage(pwFindZ(token, `
@@ -589,12 +858,31 @@
       const childHit = getNodeByPath(childPath).hit;
       if (childHit) {
         childHit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
-        flashElement(childHit._node.querySelector(SEL.label) || childHit._node, {
-          tone: 'success',
-          label: '已新增子节点',
+        const childAnchor = nodeVisualAnchor(childHit._node);
+        flow.respond({
+          target: childPath,
+          element: childAnchor,
+          badge: '新子节点已出现',
+          detail: detail,
+          relation: {
+            from: parentAnchor,
+            to: childAnchor,
+            label: '父 -> 子',
+          },
+        });
+        flow.verify({
+          target: childPath,
+          element: childAnchor,
+          badge: verify.ok ? '新增子节点已验证' : '新增子节点待确认',
+          tone: verify.ok ? 'success' : 'pending',
+          detail: joinParts([childPath, detail]),
+          relation: {
+            from: parentAnchor,
+            to: childAnchor,
+            label: '新增结构',
+          },
         });
       }
-      showHud({ action: 'add-child', target: childPath, status: verify.ok ? 'success' : 'pending', detail: text || '(空)' });
       return ok({
         path,
         childPath,
@@ -617,14 +905,31 @@
     const { hit: parentHit, error: pErr } = getNodeByPath(parentPath);
     if (!parentHit) return pErr;
     const { hit: selfHit } = getNodeByPath(path);
+    const action = where === 'before' ? 'add-before' : 'add-after';
+    const detail = summarizeText(text || '(空)');
+    const parentAnchor = nodeVisualAnchor(parentHit._node);
+    const selfAnchor = selfHit ? nodeVisualAnchor(selfHit._node) : null;
+    const flow = createVisualFlow(action, {
+      target: path,
+      detail,
+    });
     if (selfHit) {
       selfHit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
-      flashElement(selfHit._node.querySelector(SEL.label) || selfHit._node, {
-        tone: 'pending',
-        label: where === 'before' ? '正在前插同级节点' : '正在后插同级节点',
+      flow.locate({
+        element: selfAnchor,
+        badge: '参考节点已定位',
+      });
+      flow.execute({
+        element: selfAnchor,
+        badge: where === 'before' ? '正在前插同级节点' : '正在后插同级节点',
+        detail: joinParts([detail, where === 'before' ? '插入到当前节点之前' : '插入到当前节点之后']),
+        relation: selfAnchor && parentAnchor ? {
+          from: parentAnchor,
+          to: selfAnchor,
+          label: '同级参考',
+        } : null,
       });
     }
-    showHud({ action: where === 'before' ? 'add-before' : 'add-after', target: path, status: 'pending', detail: text || '(空)' });
     const token = tag(parentHit._node);
     const textLit = JSON.stringify(text || '');
     const whereLit = JSON.stringify(where);
@@ -651,12 +956,35 @@
       const newHit = getNodeByPath(newPath).hit;
       if (newHit) {
         newHit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
-        flashElement(newHit._node.querySelector(SEL.label) || newHit._node, {
-          tone: 'success',
-          label: '已新增同级节点',
+        const newAnchor = nodeVisualAnchor(newHit._node);
+        flow.respond({
+          target: newPath,
+          element: newAnchor,
+          badge: '新同级节点已出现',
+          detail: joinParts([newPath, detail]),
+          relation: selfAnchor && newAnchor ? {
+            from: selfAnchor,
+            to: newAnchor,
+            label: where === 'before' ? '前插完成' : '后插完成',
+            fromSide: where === 'before' ? 'left' : 'right',
+            toSide: where === 'before' ? 'right' : 'left',
+          } : null,
+        });
+        flow.verify({
+          target: newPath,
+          element: newAnchor,
+          badge: verify.ok ? '同级插入已验证' : '同级插入待确认',
+          tone: verify.ok ? 'success' : 'pending',
+          detail: joinParts([newPath, detail]),
+          relation: selfAnchor && newAnchor ? {
+            from: selfAnchor,
+            to: newAnchor,
+            label: '同级结构',
+            fromSide: where === 'before' ? 'left' : 'right',
+            toSide: where === 'before' ? 'right' : 'left',
+          } : null,
         });
       }
-      showHud({ action: where === 'before' ? 'add-before' : 'add-after', target: newPath, status: verify.ok ? 'success' : 'pending', detail: text || '(空)' });
       return ok({
         path,
         newPath,
@@ -672,12 +1000,26 @@
     if (!isValidPath(path)) return err('E_BAD_ARG', 'path 非法');
     const { hit, error } = getNodeByPath(path);
     if (!hit) return error;
-    hit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
-    flashElement(hit._node.querySelector(SEL.label) || hit._node, {
-      tone: 'danger',
-      label: '准备删除',
+    const parentPath = parentPathOf(path);
+    const parentBefore = parentPath ? getNodeByPath(parentPath).hit : null;
+    const anchor = nodeVisualAnchor(hit._node);
+    const detail = summarizeText(hit.text || '');
+    const flow = createVisualFlow('remove', {
+      target: path,
+      detail,
     });
-    showHud({ action: 'remove', target: path, status: 'danger', detail: hit.text || '' });
+    hit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
+    flow.locate({
+      element: anchor,
+      badge: '待删除节点已定位',
+      tone: 'danger',
+    });
+    flow.execute({
+      element: anchor,
+      badge: '准备删除',
+      tone: 'danger',
+      detail: detail,
+    });
     if (visualState.config.enabled) await sleep(Math.min(180, Math.floor(visualState.config.durationMs / 2)));
     const token = tag(hit._node);
     try {
@@ -692,11 +1034,29 @@
       const scan = scanTree();
       const still = scan.ok ? scan.entries.find((e) => e.path === path) : null;
       const stillHasSameTitle = still && still.text === res.removed.title;
-      showHud({
-        action: 'remove',
-        target: path,
-        status: !stillHasSameTitle ? 'success' : 'pending',
-        detail: !stillHasSameTitle ? '已删除' : '等待确认删除',
+      const parentAfter = parentPath ? getNodeByPath(parentPath).hit : null;
+      const parentAfterAnchor = parentAfter ? nodeVisualAnchor(parentAfter._node) : null;
+      const fallbackAnchor = parentAfterAnchor || (still && still._node ? nodeVisualAnchor(still._node) : null);
+      flow.respond({
+        element: fallbackAnchor,
+        badge: !stillHasSameTitle ? '页面已移除目标节点' : '页面正在重排',
+        tone: !stillHasSameTitle ? 'info' : 'pending',
+        detail: !stillHasSameTitle ? '节点已从当前位置消失' : '等待确认删除结果',
+      });
+      flow.verify({
+        element: fallbackAnchor,
+        badge: !stillHasSameTitle ? '删除结果已验证' : '删除结果待确认',
+        tone: !stillHasSameTitle ? 'success' : 'pending',
+        detail: !stillHasSameTitle
+          ? joinParts([path, detail && `已删除: ${detail}`])
+          : joinParts([path, '等待确认删除']),
+        relation: parentBefore && parentAfterAnchor ? {
+          from: nodeVisualAnchor(parentBefore._node),
+          to: parentAfterAnchor,
+          label: '结构已回收',
+          fromSide: 'bottom',
+          toSide: 'bottom',
+        } : null,
       });
       return ok({ path, removed: res.removed, verifiedGone: !stillHasSameTitle });
     } finally { untag(hit._node); }
@@ -779,13 +1139,24 @@
     // 但我们仍然滚动 + 闪红边做视觉反馈，保留与旧版相同的语义。
     const { hit, error } = getNodeByPath(path);
     if (!hit) return error;
-    hit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
-    flashElement(hit._node.querySelector(SEL.label) || hit._node, {
-      tone: 'info',
-      label: '已定位',
-      durationMs: 600,
+    const anchor = nodeVisualAnchor(hit._node);
+    const flow = createVisualFlow('select', {
+      target: path,
+      detail: summarizeText(hit.text || ''),
     });
-    showHud({ action: 'select', target: path, status: 'info', detail: hit.text || '' });
+    hit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
+    flow.locate({
+      element: anchor,
+      badge: '已定位',
+      durationMs: 520,
+    });
+    flow.verify({
+      element: anchor,
+      badge: '仅视觉定位',
+      tone: 'info',
+      detail: joinParts([summarizeText(hit.text || ''), '无真实选中态']),
+      durationMs: 760,
+    });
     return ok({ path, note: 'rc-tree selectable=false，仅滚动+闪烁' });
   }
 
@@ -797,12 +1168,21 @@
     const btn = findVisibleButtonByText(name);
     if (!btn) return err('E_NOT_FOUND', `按钮"${name}"当前不可见`);
     if (btn.disabled) return err('E_DISABLED', `按钮"${name}"当前 disabled`);
-    flashElement(btn, {
-      tone: 'pending',
-      label: `正在点击：${name}`,
+    const flow = createVisualFlow('cta', {
+      target: name,
+      detail: '',
+    });
+    flow.locate({
+      element: btn,
+      badge: '按钮已定位',
+      tone: 'info',
       inset: 4,
     });
-    showHud({ action: 'cta', target: name, status: 'pending' });
+    flow.execute({
+      element: btn,
+      badge: `正在点击：${name}`,
+      inset: 4,
+    });
     const beforeUrl = location.href;
     const res = await runInPage(pwClickBtnByText(name));
     if (!res || res.err) {
@@ -813,17 +1193,20 @@
     const afterUrl = location.href;
     const afterBtn = findVisibleButtonByText(name);
     if (afterBtn) {
-      flashElement(afterBtn, {
-        tone: 'success',
-        label: `已触发：${name}`,
+      flow.respond({
+        element: afterBtn,
+        badge: afterUrl !== beforeUrl ? '按钮触发后已跳转' : `已触发：${name}`,
+        tone: afterUrl !== beforeUrl ? 'info' : 'pending',
         inset: 4,
+        detail: afterUrl !== beforeUrl ? afterUrl : '操作已触发，等待结果确认',
       });
     }
-    showHud({
-      action: 'cta',
-      target: name,
-      status: 'success',
-      detail: afterUrl !== beforeUrl ? '页面已跳转' : '操作已触发',
+    flow.verify({
+      element: afterBtn || btn,
+      badge: afterUrl !== beforeUrl ? '跳转结果已确认' : '按钮操作已确认',
+      tone: 'success',
+      inset: 4,
+      detail: afterUrl !== beforeUrl ? `页面已跳转: ${afterUrl}` : '操作已触发',
     });
     return ok({
       name,
