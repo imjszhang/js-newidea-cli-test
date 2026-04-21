@@ -20,7 +20,7 @@
  * 所有 API 返回形状统一：{ok, data?, code?, message?}；bridge 本身返 JSON string。
  */
 ;(() => {
-  const VERSION = '0.8.0';
+  const VERSION = '0.9.0';
 
   const SEL = {
     tree: '.rc-tree.outline-tree[role="tree"]',
@@ -456,6 +456,91 @@
   function findVisibleButtonByText(text) {
     return Array.from(document.querySelectorAll('button'))
       .find((b) => (b.innerText || '').trim() === text && isVisible(b));
+  }
+
+  function findVisibleDialogByText(text) {
+    return Array.from(document.querySelectorAll('[role="dialog"]'))
+      .find((el) => isVisible(el) && ((el.innerText || '').includes(text)));
+  }
+
+  function findVisibleElementByExactText(root, selector, text) {
+    if (!root) return null;
+    return Array.from(root.querySelectorAll(selector))
+      .find((el) => isVisible(el) && ((el.innerText || '').trim() === text));
+  }
+
+  function normalizeGenerateFullLanguage(input) {
+    if (input == null) return null;
+    const raw = String(input).trim().toLowerCase();
+    if (!raw) return null;
+    if (raw === 'zh' || raw === 'chinese' || raw === '中文') return '中文';
+    if (raw === 'en' || raw === 'english') return 'English';
+    return null;
+  }
+
+  function normalizeGenerateFullCnRefs(input) {
+    if (input == null) return null;
+    const raw = String(input).trim().toLowerCase();
+    if (!raw) return null;
+    if (['yes', 'y', 'true', '1', '是'].includes(raw)) return '是';
+    if (['no', 'n', 'false', '0', '否'].includes(raw)) return '否';
+    return null;
+  }
+
+  function normalizeGenerateFullDialogAction(input) {
+    if (input == null) return null;
+    const raw = String(input).trim().toLowerCase();
+    if (!raw) return null;
+    if (raw === 'confirm' || raw === 'ok' || raw === '确定') return '确定';
+    if (raw === 'cancel' || raw === '取消') return '取消';
+    return null;
+  }
+
+  function isGenerateFullOptionSelected(el) {
+    if (!el) return false;
+    const color = String(getComputedStyle(el).color || '').replace(/\s+/g, '');
+    return color === 'rgb(255,255,255)';
+  }
+
+  function readGenerateFullDialogState(dialog) {
+    if (!dialog) return { language: '', cnRefs: '' };
+    const language = ['中文', 'English'].find((label) => {
+      const el = findVisibleElementByExactText(dialog, 'div', label);
+      return el && isGenerateFullOptionSelected(el);
+    }) || '';
+    const cnRefs = ['是', '否'].find((label) => {
+      const el = findVisibleElementByExactText(dialog, 'div', label);
+      return el && isGenerateFullOptionSelected(el);
+    }) || '';
+    return { language, cnRefs };
+  }
+
+  async function waitForGenerateFullDialog(timeoutMs = 1800) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const dialog = findVisibleDialogByText('确认生成全文');
+      if (dialog) return dialog;
+      await sleep(80);
+    }
+    return null;
+  }
+
+  async function selectGenerateFullDialogOption(dialog, label, kind) {
+    let currentDialog = dialog;
+    let option = findVisibleElementByExactText(currentDialog, 'div', label);
+    if (!option) {
+      return err('E_NOT_FOUND', `生成全文确认框里未找到${kind}选项"${label}"`);
+    }
+    option.click();
+    for (let i = 0; i < 12; i++) {
+      await sleep(80);
+      currentDialog = findVisibleDialogByText('确认生成全文') || currentDialog;
+      option = findVisibleElementByExactText(currentDialog, 'div', label);
+      if (option && isGenerateFullOptionSelected(option)) {
+        return ok({ label });
+      }
+    }
+    return err('E_UI_MISMATCH', `${kind}选项"${label}"点击后未进入选中态`);
   }
 
   function listNodes() {
@@ -1161,9 +1246,26 @@
   }
 
   // ---------- API: CTA ----------
-  async function clickCta(name) {
+  async function clickCta(name, options = {}) {
     if (!CTA_NAMES.includes(name) && !EDITOR_CTA_NAMES.includes(name)) {
       return err('E_BAD_ARG', `只接受这些按钮文案：${[...CTA_NAMES, ...EDITOR_CTA_NAMES].join(' / ')}`);
+    }
+    const wantsGenerateOptions = options && typeof options === 'object'
+      && (options.fulltextLang != null || options.cnRefs != null || options.dialogAction != null);
+    if (name !== '生成全文' && wantsGenerateOptions) {
+      return err('E_BAD_ARG', '只有“生成全文”支持弹窗选项（fulltextLang / cnRefs / dialogAction）');
+    }
+    const desiredLanguage = normalizeGenerateFullLanguage(options && options.fulltextLang);
+    if (options && options.fulltextLang != null && !desiredLanguage) {
+      return err('E_BAD_ARG', 'fulltextLang 只接受 zh | en | 中文 | English');
+    }
+    const desiredCnRefs = normalizeGenerateFullCnRefs(options && options.cnRefs);
+    if (options && options.cnRefs != null && !desiredCnRefs) {
+      return err('E_BAD_ARG', 'cnRefs 只接受 yes | no | 是 | 否');
+    }
+    const dialogAction = normalizeGenerateFullDialogAction(options && options.dialogAction) || '确定';
+    if (options && options.dialogAction != null && !normalizeGenerateFullDialogAction(options.dialogAction)) {
+      return err('E_BAD_ARG', 'dialogAction 只接受 confirm | cancel | 确定 | 取消');
     }
     const btn = findVisibleButtonByText(name);
     if (!btn) return err('E_NOT_FOUND', `按钮"${name}"当前不可见`);
@@ -1189,7 +1291,108 @@
       if (res && res.err === 'disabled') return err('E_DISABLED', `按钮"${name}"已变 disabled`);
       return err('E_FIBER', `调用 onClick 失败: ${(res && res.err) || 'unknown'}`);
     }
-    await sleep(1000);
+    await sleep(280);
+    if (name === '生成全文') {
+      let dialog = await waitForGenerateFullDialog();
+      if (dialog) {
+        flow.respond({
+          element: dialog,
+          badge: '确认弹窗已出现',
+          tone: 'info',
+          detail: '可选择语言、中文文献与最终操作',
+          inset: 10,
+        });
+        if (desiredLanguage) {
+          const selected = await selectGenerateFullDialogOption(dialog, desiredLanguage, '语言');
+          if (!selected.ok) return selected;
+          dialog = findVisibleDialogByText('确认生成全文') || dialog;
+        }
+        const hasCnRefsOptions = !!findVisibleElementByExactText(dialog, 'div', '是')
+          || !!findVisibleElementByExactText(dialog, 'div', '否');
+        const cnRefsUnavailable = !!desiredCnRefs && !hasCnRefsOptions;
+        if (desiredCnRefs && hasCnRefsOptions) {
+          const selected = await selectGenerateFullDialogOption(dialog, desiredCnRefs, '中文文献');
+          if (!selected.ok) return selected;
+          dialog = findVisibleDialogByText('确认生成全文') || dialog;
+        }
+        const stateBeforeAction = readGenerateFullDialogState(dialog);
+        const actionBtn = findVisibleElementByExactText(dialog, 'button', dialogAction);
+        if (!actionBtn) {
+          return err('E_NOT_FOUND', `生成全文确认框里未找到操作按钮"${dialogAction}"`);
+        }
+        actionBtn.click();
+        if (dialogAction === '取消') {
+          await sleep(260);
+          const dialogClosed = !findVisibleDialogByText('确认生成全文');
+          const afterUrl = location.href;
+          flow.verify({
+            element: btn,
+            badge: dialogClosed ? '已取消生成全文' : '取消结果待确认',
+            tone: dialogClosed ? 'success' : 'pending',
+            inset: 4,
+            detail: dialogClosed ? '确认框已关闭，未继续生成全文' : '确认框仍可见',
+          });
+          return ok({
+            name,
+            openedDialog: true,
+            dialogAction: 'cancel',
+            language: stateBeforeAction.language,
+            cnRefs: stateBeforeAction.cnRefs,
+            requestedCnRefs: desiredCnRefs || '',
+            cnRefsUnavailable,
+            dialogClosed,
+            urlChanged: afterUrl !== beforeUrl,
+            newUrl: afterUrl !== beforeUrl ? afterUrl : undefined,
+            btnStillVisible: document.body.contains(btn) && isVisible(btn),
+          });
+        }
+        let afterUrl = location.href;
+        let dialogStillVisible = !!findVisibleDialogByText('确认生成全文');
+        for (let i = 0; i < 40 && dialogStillVisible && afterUrl === beforeUrl; i++) {
+          await sleep(150);
+          afterUrl = location.href;
+          dialogStillVisible = !!findVisibleDialogByText('确认生成全文');
+        }
+        const verified = afterUrl !== beforeUrl || !dialogStillVisible;
+        const afterBtn = findVisibleButtonByText(name);
+        if (afterBtn) {
+          flow.respond({
+            element: afterBtn,
+            badge: afterUrl !== beforeUrl ? '确认后已跳转' : (dialogStillVisible ? '等待页面响应' : '确认框已关闭'),
+            tone: verified ? 'info' : 'pending',
+            inset: 4,
+            detail: afterUrl !== beforeUrl ? afterUrl : (dialogStillVisible ? '等待页面继续处理' : '页面已消费确认框'),
+          });
+        }
+        flow.verify({
+          element: afterBtn || btn,
+          badge: verified ? '生成全文操作已确认' : '生成全文结果待确认',
+          tone: verified ? 'success' : 'pending',
+          inset: 4,
+          detail: joinParts([
+            stateBeforeAction.language && `语言: ${stateBeforeAction.language}`,
+            stateBeforeAction.cnRefs && `中文文献: ${stateBeforeAction.cnRefs}`,
+            cnRefsUnavailable ? `中文文献选项当前不可用（请求: ${desiredCnRefs}）` : '',
+            afterUrl !== beforeUrl ? `页面已跳转: ${afterUrl}` : (!dialogStillVisible ? '确认框已关闭' : '等待进一步页面响应'),
+          ]),
+        });
+        return ok({
+          name,
+          openedDialog: true,
+          dialogAction: 'confirm',
+          language: stateBeforeAction.language,
+          cnRefs: stateBeforeAction.cnRefs,
+          requestedCnRefs: desiredCnRefs || '',
+          cnRefsUnavailable,
+          urlChanged: afterUrl !== beforeUrl,
+          newUrl: afterUrl !== beforeUrl ? afterUrl : undefined,
+          dialogClosed: !dialogStillVisible,
+          verified,
+          btnStillVisible: document.body.contains(btn) && isVisible(btn),
+        });
+      }
+    }
+    await sleep(720);
     const afterUrl = location.href;
     const afterBtn = findVisibleButtonByText(name);
     if (afterBtn) {

@@ -54,6 +54,8 @@ node review-cli.js remove 0.2.0.0
 
 node review-cli.js cta 下载提纲
 node review-cli.js cta 生成全文 --confirm
+node review-cli.js cta 生成全文 --dialog-action cancel --fulltext-lang en
+node review-cli.js cta 生成全文 --confirm --fulltext-lang zh --dialog-action confirm
 node review-cli.js cta 返回首页 --confirm
 ```
 
@@ -110,6 +112,9 @@ node review-cli.js primary "生成提纲" "线粒体自噬与帕金森病中的�
 - `--visual-detail <compact|staged>`
 - `--visual-ms <n>`
 - `--mode <mode>`
+- `--fulltext-lang <zh|en|中文|English>`
+- `--cn-refs <yes|no|是|否>`
+- `--dialog-action <confirm|cancel>`
 - `-v, --verbose`
 
 ## 视觉反馈
@@ -129,3 +134,5 @@ CLI 默认开启页面内视觉反馈：
 - `/home` 中 `生成提纲` 需要主题文本
 - `/home` 中不同模式的页面响应时延不同，`long` 通常更慢
 - 破坏性操作如 `生成全文`、`返回首页` 需要 `--confirm`
+- `/outline` 中 `生成全文` 的确认框存在页面版本差异，部分版本不显示“需要中文文献：是/否”
+- `/outline` 中确认“生成全文”后，当前已验证会进入 `/proofread`
