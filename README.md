@@ -40,10 +40,12 @@ node outline-cli.js tree --json                   # 原始结构
 node outline-cli.js find "突触"                    # 按 contains 查找
 
 node outline-cli.js select 0.2.1                  # 滚动 + 红框闪
+node outline-cli.js select 0.2.1 --visual         # 显示 HUD + 节点高亮，便于旁观操作过程
 node outline-cli.js expand 0.2 --deep             # 递归展开子树
 node outline-cli.js collapse 0.2
 
 node outline-cli.js rename 0.2.0.0 "新要点文本"     # 一步到位，无需浏览器再点
+node outline-cli.js rename 0.2.0.0 "新要点文本" --visual --visual-ms 700
 node outline-cli.js add-child 0.2 "新子要点"
 node outline-cli.js add-after 0.2.0 "新同级要点"
 node outline-cli.js remove 0.2.0.0
@@ -157,8 +159,34 @@ outline-cli cta 返回首页 --confirm        必须显式 --confirm
 - `--json`：结构化输出（`tree` / `find` / 写命令调试）
 - `--deep`：`expand` 递归
 - `--confirm`：仅破坏性 `cta`（`生成全文` / `返回首页`）需要
+- `--visual`：在页面上显示当前操作目标、动作和完成态
+- `--visual-ms <n>`：控制可视反馈持续时长（毫秒）
 - `-v, --verbose`：打印连接 / 注入细节
 - 退出码：bridge `ok:false` → `1`；连接/注入/参数等 CLI 错误 → `2` 或 `3`。
+
+## DOM 可视反馈
+
+为便于旁观自动化过程，CLI 现在支持可选的页面内视觉提示：
+
+- 节点类操作会在目标节点上显示临时高亮和动作标签
+- `add-child` / `add-after` / `add-before` 成功后会重新定位并高亮新增节点
+- `remove` 会先提示即将删除的节点，再用右上角 HUD 显示完成状态
+- `cta` 会高亮按钮本身，避免用户只看到页面突然变化
+
+示例：
+
+```bash
+node outline-cli.js select 0.2.1 --visual
+node outline-cli.js rename 0.2.0.0 "改后的文本" --visual --visual-ms 650
+node outline-cli.js add-child 0.2 "新增子要点" --visual
+node outline-cli.js cta 下载提纲 --visual
+```
+
+说明：
+
+- 视觉提示默认关闭，不影响原有自动化流程
+- 提示层使用 `pointer-events: none`，不会抢占页面点击
+- 写操作若触发 React 重渲染，bridge 会在操作后重新定位目标节点再显示完成态
 
 ## 典型流水线示例
 

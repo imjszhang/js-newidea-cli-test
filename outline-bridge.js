@@ -20,7 +20,7 @@
  * 所有 API 返回形状统一：{ok, data?, code?, message?}；bridge 本身返 JSON string。
  */
 ;(() => {
-  const VERSION = '0.7.1';
+  const VERSION = '0.7.2';
 
   const SEL = {
     tree: '.rc-tree.outline-tree[role="tree"]',
@@ -36,15 +36,196 @@
   };
   const CTA_NAMES = ['返回首页', '下载提纲', '生成全文'];
   const EDITOR_CTA_NAMES = ['一键生成', '一键复制', '替换原文'];
+  const VISUAL_DEFAULTS = {
+    enabled: false,
+    durationMs: 420,
+  };
+  const VISUAL_STYLE_ID = '__jse_visual_style__';
+  const VISUAL_LAYER_ID = '__jse_visual_layer__';
+  const VISUAL_HUD_ID = '__jse_visual_hud__';
+  const VISUAL_TONE_MAP = {
+    pending: { border: '#faad14', fill: 'rgba(250, 173, 20, 0.16)', pill: '#ad6800', text: '#fffbe6' },
+    success: { border: '#52c41a', fill: 'rgba(82, 196, 26, 0.14)', pill: '#237804', text: '#f6ffed' },
+    danger: { border: '#ff4d4f', fill: 'rgba(255, 77, 79, 0.14)', pill: '#a8071a', text: '#fff1f0' },
+    info: { border: '#1677ff', fill: 'rgba(22, 119, 255, 0.14)', pill: '#0958d9', text: '#f0f5ff' },
+  };
+  const visualState = {
+    config: { ...VISUAL_DEFAULTS },
+    hudTimer: null,
+  };
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const ok = (data) => ({ ok: true, data });
   const err = (code, message, extra = {}) => ({ ok: false, code, message, ...extra });
 
+  function clamp(n, min, max) {
+    return Math.max(min, Math.min(max, n));
+  }
+
+  function normalizeDuration(ms, fallback = VISUAL_DEFAULTS.durationMs) {
+    const n = Number(ms);
+    if (!Number.isFinite(n) || n <= 0) return fallback;
+    return clamp(Math.round(n), 120, 4000);
+  }
+
+  function normalizeVisualOptions(options = {}) {
+    const base = { ...visualState.config };
+    if (!options || typeof options !== 'object') return base;
+    if (typeof options.enabled === 'boolean') base.enabled = options.enabled;
+    if (options.durationMs != null) base.durationMs = normalizeDuration(options.durationMs, base.durationMs);
+    return base;
+  }
+
+  function ensureVisualRoot() {
+    let style = document.getElementById(VISUAL_STYLE_ID);
+    if (!style) {
+      style = document.createElement('style');
+      style.id = VISUAL_STYLE_ID;
+      style.textContent = `
+        #${VISUAL_LAYER_ID}{
+          position:fixed;
+          inset:0;
+          pointer-events:none;
+          z-index:2147483646;
+          overflow:visible;
+        }
+        .__jse_visual_box{
+          position:fixed;
+          box-sizing:border-box;
+          border-radius:8px;
+          animation:__jse_visual_pulse .55s ease-out 1;
+        }
+        .__jse_visual_badge{
+          position:absolute;
+          left:0;
+          top:-28px;
+          max-width:280px;
+          padding:4px 10px;
+          border-radius:999px;
+          font:600 12px/1.2 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+          letter-spacing:.01em;
+          white-space:nowrap;
+          text-overflow:ellipsis;
+          overflow:hidden;
+          box-shadow:0 8px 24px rgba(0,0,0,.18);
+        }
+        #${VISUAL_HUD_ID}{
+          position:fixed;
+          top:16px;
+          right:16px;
+          max-width:360px;
+          padding:10px 14px;
+          border-radius:12px;
+          box-shadow:0 12px 32px rgba(0,0,0,.22);
+          font:600 13px/1.35 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+          white-space:pre-wrap;
+        }
+        @keyframes __jse_visual_pulse{
+          0%{transform:scale(.985);opacity:.2}
+          35%{transform:scale(1.003);opacity:1}
+          100%{transform:scale(1);opacity:1}
+        }
+      `;
+      (document.head || document.documentElement).appendChild(style);
+    }
+    let layer = document.getElementById(VISUAL_LAYER_ID);
+    if (!layer) {
+      layer = document.createElement('div');
+      layer.id = VISUAL_LAYER_ID;
+      (document.body || document.documentElement).appendChild(layer);
+    }
+    return layer;
+  }
+
+  function toneSpec(tone) {
+    return VISUAL_TONE_MAP[tone] || VISUAL_TONE_MAP.info;
+  }
+
+  function removeLater(el, durationMs) {
+    if (!el) return;
+    const ms = normalizeDuration(durationMs);
+    window.setTimeout(() => {
+      if (el && el.parentNode) el.remove();
+    }, ms);
+  }
+
+  function flashElement(el, { tone = 'info', label = '', durationMs, inset = 0 } = {}) {
+    if (!el || !visualState.config.enabled) return false;
+    const rect = el.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+    const layer = ensureVisualRoot();
+    const spec = toneSpec(tone);
+    const box = document.createElement('div');
+    box.className = '__jse_visual_box';
+    box.style.left = Math.max(4, rect.left - inset) + 'px';
+    box.style.top = Math.max(4, rect.top - inset) + 'px';
+    box.style.width = Math.max(18, rect.width + inset * 2) + 'px';
+    box.style.height = Math.max(18, rect.height + inset * 2) + 'px';
+    box.style.border = `2px solid ${spec.border}`;
+    box.style.background = spec.fill;
+    box.style.boxShadow = `0 0 0 1px ${spec.border}33, 0 12px 28px ${spec.border}22`;
+    if (label) {
+      const badge = document.createElement('div');
+      badge.className = '__jse_visual_badge';
+      badge.textContent = label;
+      badge.style.background = spec.pill;
+      badge.style.color = spec.text;
+      const desiredTop = rect.top < 38 ? rect.height + 8 : -28;
+      badge.style.top = desiredTop + 'px';
+      box.appendChild(badge);
+    }
+    layer.appendChild(box);
+    removeLater(box, durationMs);
+    return true;
+  }
+
+  function showHud({ action = '', target = '', status = 'pending', detail = '', durationMs } = {}) {
+    if (!visualState.config.enabled) return false;
+    const layer = ensureVisualRoot();
+    let hud = document.getElementById(VISUAL_HUD_ID);
+    if (!hud) {
+      hud = document.createElement('div');
+      hud.id = VISUAL_HUD_ID;
+      layer.appendChild(hud);
+    }
+    const spec = toneSpec(status);
+    const lines = [];
+    if (action) lines.push(action);
+    if (target) lines.push(target);
+    if (detail) lines.push(detail);
+    hud.textContent = lines.join('\n');
+    hud.style.border = `1px solid ${spec.border}`;
+    hud.style.background = spec.fill.replace(/0\.\d+\)$/, '0.92)');
+    hud.style.color = spec.pill;
+    if (visualState.hudTimer) clearTimeout(visualState.hudTimer);
+    visualState.hudTimer = window.setTimeout(() => {
+      if (hud && hud.parentNode) hud.remove();
+      visualState.hudTimer = null;
+    }, normalizeDuration(durationMs, Math.max(900, visualState.config.durationMs * 2)));
+    return true;
+  }
+
+  function cleanupVisualArtifacts() {
+    const layer = document.getElementById(VISUAL_LAYER_ID);
+    if (!layer) return;
+    Array.from(layer.querySelectorAll('.__jse_visual_box')).forEach((el) => el.remove());
+    const hud = document.getElementById(VISUAL_HUD_ID);
+    if (hud) hud.remove();
+    if (visualState.hudTimer) {
+      clearTimeout(visualState.hudTimer);
+      visualState.hudTimer = null;
+    }
+  }
+
   function isVisible(el) {
     if (!el) return false;
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0;
+  }
+
+  function findVisibleButtonByText(text) {
+    return Array.from(document.querySelectorAll('button'))
+      .find((b) => (b.innerText || '').trim() === text && isVisible(b));
   }
 
   function listNodes() {
@@ -307,6 +488,17 @@
     });
   }
 
+  function setVisualOptions(options = {}) {
+    if (!options || typeof options !== 'object') {
+      visualState.config = { ...VISUAL_DEFAULTS };
+      cleanupVisualArtifacts();
+      return ok({ ...visualState.config });
+    }
+    visualState.config = normalizeVisualOptions(options);
+    if (!visualState.config.enabled) cleanupVisualArtifacts();
+    return ok({ ...visualState.config });
+  }
+
   async function scrollIntoView(path) {
     const { hit, error } = getNodeByPath(path);
     if (!hit) return error;
@@ -336,6 +528,12 @@
     if (typeof text !== 'string') return err('E_BAD_ARG', 'text 需为字符串');
     const { hit, error } = getNodeByPath(path);
     if (!hit) return error;
+    hit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
+    flashElement(hit._node.querySelector(SEL.label) || hit._node, {
+      tone: 'pending',
+      label: '正在重命名',
+    });
+    showHud({ action: 'rename', target: path, status: 'pending', detail: text });
     const token = tag(hit._node);
     const textLit = JSON.stringify(text);
     try {
@@ -347,6 +545,14 @@
   `));
       if (!res || res.err) return err('E_FIBER', (res && res.err) || 'unknown');
       await sleep(120);
+      const afterHit = getNodeByPath(path).hit;
+      if (afterHit) {
+        flashElement(afterHit._node.querySelector(SEL.label) || afterHit._node, {
+          tone: 'success',
+          label: '已重命名',
+        });
+      }
+      showHud({ action: 'rename', target: path, status: 'success', detail: text });
       return ok({ path, before: res.before, after: res.after });
     } finally { untag(hit._node); }
   }
@@ -359,6 +565,12 @@
     if (text != null && typeof text !== 'string') return err('E_BAD_ARG', 'text 需为字符串或省略');
     const { hit, error } = getNodeByPath(path);
     if (!hit) return error;
+    hit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
+    flashElement(hit._node.querySelector(SEL.label) || hit._node, {
+      tone: 'pending',
+      label: '正在添加子节点',
+    });
+    showHud({ action: 'add-child', target: path, status: 'pending', detail: text || '(空)' });
     const token = tag(hit._node);
     try {
       const res = await runInPage(pwFindZ(token, `
@@ -374,6 +586,15 @@
       await sleep(120);
       const childPath = path + '.' + res.newIndex;
       const verify = await waitTreeText(childPath, text || '', { timeoutMs: 1500 });
+      const childHit = getNodeByPath(childPath).hit;
+      if (childHit) {
+        childHit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
+        flashElement(childHit._node.querySelector(SEL.label) || childHit._node, {
+          tone: 'success',
+          label: '已新增子节点',
+        });
+      }
+      showHud({ action: 'add-child', target: childPath, status: verify.ok ? 'success' : 'pending', detail: text || '(空)' });
       return ok({
         path,
         childPath,
@@ -395,6 +616,15 @@
     const selfIdx = parseInt(selfLeaf, 10);
     const { hit: parentHit, error: pErr } = getNodeByPath(parentPath);
     if (!parentHit) return pErr;
+    const { hit: selfHit } = getNodeByPath(path);
+    if (selfHit) {
+      selfHit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
+      flashElement(selfHit._node.querySelector(SEL.label) || selfHit._node, {
+        tone: 'pending',
+        label: where === 'before' ? '正在前插同级节点' : '正在后插同级节点',
+      });
+    }
+    showHud({ action: where === 'before' ? 'add-before' : 'add-after', target: path, status: 'pending', detail: text || '(空)' });
     const token = tag(parentHit._node);
     const textLit = JSON.stringify(text || '');
     const whereLit = JSON.stringify(where);
@@ -418,6 +648,15 @@
       await sleep(120);
       const newPath = parentPath + '.' + res.newIndex;
       const verify = await waitTreeText(newPath, text || '', { timeoutMs: 1500 });
+      const newHit = getNodeByPath(newPath).hit;
+      if (newHit) {
+        newHit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
+        flashElement(newHit._node.querySelector(SEL.label) || newHit._node, {
+          tone: 'success',
+          label: '已新增同级节点',
+        });
+      }
+      showHud({ action: where === 'before' ? 'add-before' : 'add-after', target: newPath, status: verify.ok ? 'success' : 'pending', detail: text || '(空)' });
       return ok({
         path,
         newPath,
@@ -433,6 +672,13 @@
     if (!isValidPath(path)) return err('E_BAD_ARG', 'path 非法');
     const { hit, error } = getNodeByPath(path);
     if (!hit) return error;
+    hit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
+    flashElement(hit._node.querySelector(SEL.label) || hit._node, {
+      tone: 'danger',
+      label: '准备删除',
+    });
+    showHud({ action: 'remove', target: path, status: 'danger', detail: hit.text || '' });
+    if (visualState.config.enabled) await sleep(Math.min(180, Math.floor(visualState.config.durationMs / 2)));
     const token = tag(hit._node);
     try {
       const res = await runInPage(pwFindZ(token, `
@@ -446,6 +692,12 @@
       const scan = scanTree();
       const still = scan.ok ? scan.entries.find((e) => e.path === path) : null;
       const stillHasSameTitle = still && still.text === res.removed.title;
+      showHud({
+        action: 'remove',
+        target: path,
+        status: !stillHasSameTitle ? 'success' : 'pending',
+        detail: !stillHasSameTitle ? '已删除' : '等待确认删除',
+      });
       return ok({ path, removed: res.removed, verifiedGone: !stillHasSameTitle });
     } finally { untag(hit._node); }
   }
@@ -528,12 +780,12 @@
     const { hit, error } = getNodeByPath(path);
     if (!hit) return error;
     hit._node.scrollIntoView({ block: 'center', inline: 'nearest' });
-    const label = hit._node.querySelector(SEL.label);
-    if (label) {
-      const original = label.style.outline;
-      label.style.outline = '2px solid #ff4d4d';
-      setTimeout(() => { label.style.outline = original; }, 600);
-    }
+    flashElement(hit._node.querySelector(SEL.label) || hit._node, {
+      tone: 'info',
+      label: '已定位',
+      durationMs: 600,
+    });
+    showHud({ action: 'select', target: path, status: 'info', detail: hit.text || '' });
     return ok({ path, note: 'rc-tree selectable=false，仅滚动+闪烁' });
   }
 
@@ -542,10 +794,15 @@
     if (!CTA_NAMES.includes(name) && !EDITOR_CTA_NAMES.includes(name)) {
       return err('E_BAD_ARG', `只接受这些按钮文案：${[...CTA_NAMES, ...EDITOR_CTA_NAMES].join(' / ')}`);
     }
-    const btn = Array.from(document.querySelectorAll('button'))
-      .find((b) => b.innerText.trim() === name && isVisible(b));
+    const btn = findVisibleButtonByText(name);
     if (!btn) return err('E_NOT_FOUND', `按钮"${name}"当前不可见`);
     if (btn.disabled) return err('E_DISABLED', `按钮"${name}"当前 disabled`);
+    flashElement(btn, {
+      tone: 'pending',
+      label: `正在点击：${name}`,
+      inset: 4,
+    });
+    showHud({ action: 'cta', target: name, status: 'pending' });
     const beforeUrl = location.href;
     const res = await runInPage(pwClickBtnByText(name));
     if (!res || res.err) {
@@ -554,6 +811,20 @@
     }
     await sleep(1000);
     const afterUrl = location.href;
+    const afterBtn = findVisibleButtonByText(name);
+    if (afterBtn) {
+      flashElement(afterBtn, {
+        tone: 'success',
+        label: `已触发：${name}`,
+        inset: 4,
+      });
+    }
+    showHud({
+      action: 'cta',
+      target: name,
+      status: 'success',
+      detail: afterUrl !== beforeUrl ? '页面已跳转' : '操作已触发',
+    });
     return ok({
       name,
       urlChanged: afterUrl !== beforeUrl,
@@ -587,6 +858,7 @@
     get,
     find,
     state,
+    setVisualOptions,
     scrollIntoView,
     select,
     expand,
