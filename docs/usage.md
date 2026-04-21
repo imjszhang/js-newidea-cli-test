@@ -2,10 +2,11 @@
 
 `review-cli` 是 `review.newidea.pro` 的多页面自动化 CLI。
 
-当前支持两个页面 profile：
+当前支持三个页面 profile：
 
 - `outline`：提纲树读写、CTA 点击、节点级视觉反馈
 - `home`：主题输入、生成模式选择、主按钮触发与跳转验证
+- `proofread`：初稿校对页侦察与局部编辑辅助（段落卡片、编辑态、AI 改写面板）
 
 ## 前置条件
 
@@ -23,6 +24,7 @@
 - `REVIEW_PAGE`
 - `REVIEW_OUTLINE_TARGET_URL_FRAGMENT`
 - `REVIEW_HOME_TARGET_URL_FRAGMENT`
+- `REVIEW_PROOFREAD_TARGET_URL_FRAGMENT`
 
 ## 快速开始
 
@@ -34,6 +36,10 @@ node review-cli.js state
 node review-cli.js doctor --page home
 node review-cli.js probe --page home
 node review-cli.js state --page home
+
+node review-cli.js doctor --page proofread
+node review-cli.js probe --page proofread
+node review-cli.js state --page proofread
 ```
 
 ## `/outline` 常用命令
@@ -95,6 +101,29 @@ node review-cli.js primary "生成提纲" "线粒体自噬与帕金森病中的�
 - `primary "继续编辑本地文档"` 的主要验证信号是 `filechooser`
 - `primary "生成提纲"` 需要主题文本，主要验证信号是从 `/home` 跳转到 `/outline`
 
+## `/proofread` 常用命令
+
+```bash
+node review-cli.js doctor --page proofread
+node review-cli.js probe --page proofread
+node review-cli.js state --page proofread
+node review-cli.js select-section 3 --page proofread
+node review-cli.js rewrite-prompt "保持学术语气，压缩重复表述" --page proofread
+node review-cli.js editor-button "AI 改写" --page proofread
+```
+
+说明：
+
+- 当前已支持段落选中、编辑态识别和 AI 改写面板辅助
+- `probe` 侧重页面识别、顶部 CTA、活动段落和提纲采样
+- `state` 侧重当前段落卡片列表、滚动位置、编辑态和按钮状态
+- `select-section <paragraphIndex>` 会按 0-based 顺序选中目标段落，并验证该卡片是否切到活动态
+- 当前活动态更像瞬时聚焦，高亮不一定在后续独立命令里持续保留
+- 若页面已进入编辑态，`state` / `probe` 会额外报告当前编辑段、编辑态按钮和 AI 改写面板状态
+- `rewrite-prompt <text>` 用于填写“请输入额外需求”输入框
+- `editor-button <name>` 用于点击当前编辑态中的按钮，例如 `确认校对`、`AI 改写`、`一键重写`
+- `替换原文` 会先弹出确认框；当前已在真实页面验证，确认后会把改写结果落回原段
+
 ## 帮助与选项
 
 完整命令说明以 `node review-cli.js --help` 为准。
@@ -128,7 +157,7 @@ CLI 默认开启页面内视觉反馈：
 
 ## 已知限制
 
-- bridge 按页面 profile 注入：`outline-bridge.js` 只适用于 `/outline`，`home-bridge.js` 只适用于 `/home`
+- bridge 按页面 profile 注入：`outline-bridge.js` 只适用于 `/outline`，`home-bridge.js` 只适用于 `/home`，`proofread-bridge.js` 只适用于 `/proofread`
 - `/outline` 中 `expand` / `collapse` 在当前站点通常是 no-op
 - `/outline` 中 `select` 只是视觉反馈，没有真实选中态
 - `/home` 中 `生成提纲` 需要主题文本
@@ -136,3 +165,4 @@ CLI 默认开启页面内视觉反馈：
 - 破坏性操作如 `生成全文`、`返回首页` 需要 `--confirm`
 - `/outline` 中 `生成全文` 的确认框存在页面版本差异，部分版本不显示“需要中文文献：是/否”
 - `/outline` 中确认“生成全文”后，当前已验证会进入 `/proofread`
+- `/proofread` 当前仍未完全打通“如何稳定进入编辑态”的自动化链路；现阶段支持 `doctor / probe / state / select-section / rewrite-prompt / editor-button`

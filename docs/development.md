@@ -31,6 +31,10 @@
 - `home-bridge.js`
   - `/home` 页 bridge
   - 主题、模式、主按钮、跳转验证
+- `proofread-bridge.js`
+  - `/proofread` 页 bridge
+  - 段落校对卡片、顶部 CTA、活动段侦察
+  - 编辑态识别与 AI 改写面板辅助
 
 ## page profile 约定
 
@@ -66,7 +70,7 @@ CLI / session / driver 负责：
 - 命令编排
 - 错误码与进程退出码
 
-## `/outline` 与 `/home` 的差异
+## `/outline`、`/home` 与 `/proofread` 的差异
 
 ### `/outline`
 
@@ -81,6 +85,15 @@ CLI / session / driver 负责：
 - 不使用 path 模型
 - 主要涉及 `topic / mode / primary`
 - 验证不只看 DOM，还结合浏览器级事件，如 `filechooser`
+
+### `/proofread`
+
+- 以“段落校对卡片列表”而不是树 path 为中心
+- 当前开放 `probe / state / select-section / rewrite-prompt / editor-button`
+- 重点先做稳定读模型：活动段、顶部 CTA、段落卡片数量与标题
+- 当前段落身份先使用 `paragraphIndex`
+- 编辑态通过 `border-primary / caret-inherit / cursor-auto` 等 class 特征识别
+- 后续写操作要先明确“按段落 index / 标题 / DOM 锚点”哪种语义最稳
 
 ## 视觉反馈约定
 
@@ -127,3 +140,4 @@ CLI / session / driver 负责：
 - 开发说明：`docs/development.md`
 - `/home` 深度侦察：`docs/home-probe-notes.md`
 - `/outline` 深度侦察：`docs/outline-probe-notes.md`
+- `/proofread` 深度侦察：`docs/proofread-probe-notes.md`
