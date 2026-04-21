@@ -1,12 +1,13 @@
 # outline-bridge + outline-cli
 
-> 本目录是一套"把 `https://review.newidea.pro/outline` 操作面板接入 js-eyes 的远程驱动"工具。
+> 本目录是一套"把 `https://review.newidea.pro/outline` 操作面板接入可插拔浏览器驱动"的工具。
 > **全自动写操作**：rename / editBody / addChild / addSibling / remove / expand / collapse / clickCta 全部落地，无需用户在真实浏览器里再手动点一次。
 
- - `outline-bridge.js` —— 注入到页面里、挂在 `window.__jse_outline__` 的桥接脚本。v0.7.1。
-- `outline-cli.js`    —— 本地 Node CLI，基于 `@js-eyes/client-sdk` 远程驱动 bridge。
+- `outline-bridge.js` —— 注入到页面里、挂在 `window.__jse_outline__` 的桥接脚本。v0.7.1。
+- `outline-cli.js`    —— 本地 Node CLI，瘦入口；默认通过 `playwright` 连接浏览器，也支持 `js-eyes` 兼容模式。
+- `lib/`             —— driver / session / CLI 解析逻辑。`bridge` 保持页内职责，transport 抽成可替换模块。
 - `_probe-notes.md`   —— 全部侦察笔记（**推荐先读 §12 Xray 根因与 Z handlers 通道**；§7 / §8 / §9 / §9b 已推翻，仅作溯源）。
-- `package.json`      —— `bin: outline-cli`，依赖本仓 `@js-eyes/client-sdk`。
+- `package.json`      —— `bin: outline-cli`，依赖 `playwright` + `@js-eyes/client-sdk`。
 
 v0.7.0 与 v0.6.x 的本质区别：
 
@@ -18,7 +19,17 @@ v0.7.0 与 v0.6.x 的本质区别：
 
 ## 快速上手
 
-前置：Firefox 已装 js-eyes 扩展且已登录 `review.newidea.pro/outline`；`js-eyes server` 在 `ws://localhost:18080` 运行；本仓根做过 `npm install` 让 `@js-eyes/client-sdk` 在 `node_modules` 里可解析。
+### 默认路径：Playwright + Chromium CDP
+
+前置：
+
+- Chrome / Edge 已用远程调试端口启动，例如：
+  - Windows: `msedge --remote-debugging-port=9222`
+  - Windows: `chrome --remote-debugging-port=9222`
+- 浏览器中已经登录并打开 `https://review.newidea.pro/outline`
+- 本仓根目录执行过 `npm install`
+
+如需改 CDP 地址，可设 `OUTLINE_CDP_ENDPOINT=http://127.0.0.1:9222`。
 
 ```bash
 cd work_dir
@@ -42,11 +53,26 @@ node outline-cli.js cta 生成全文 --confirm         # 破坏性：会离开 /
 node outline-cli.js cta 返回首页 --confirm         # 破坏性：必须 --confirm
 ```
 
+### 兼容路径：js-eyes
+
+如果你仍想沿用旧链路：
+
+- Firefox 已装 js-eyes 扩展
+- 已登录 `review.newidea.pro/outline`
+- `js-eyes server` 运行在 `ws://localhost:18080`
+
+调用时显式指定：
+
+```bash
+node outline-cli.js doctor --driver jseyes
+node outline-cli.js tree --driver jseyes
+```
+
 ## 节点身份：path 制
 
 节点用 `"a.b.c"` 形式的 path 标识，路径即从根到目标的每级兄弟序号（零基），无持久化、每次读都从 DOM 重推。示例：
 
-```
+```text
 0           根（文章标题）
 0.0         第 1 个 section（摘要：）
 0.0.0       摘要段落正文
@@ -64,7 +90,7 @@ node outline-cli.js cta 返回首页 --confirm         # 破坏性：必须 --co
 返回一律 `{ok:true, data:<T>}` 或 `{ok:false, code, message}`；bridge 本身返 JSON 字符串，CLI 侧 parse。
 
 | 方法 | 说明 |
-|---|---|
+| --- | --- |
 | `version()` | 当前桥接版本 |
 | `probe()` | URL / 节点总数 / editorOpen / xrayAvailable / 全局 CTA 可见性 |
 | `tree()` | 扁平化节点数组 `[{path, depth, text, switcher}, ...]` |
@@ -87,7 +113,7 @@ node outline-cli.js cta 返回首页 --confirm         # 破坏性：必须 --co
 错误码：
 
 | code | 含义 |
-|---|---|
+| --- | --- |
 | `E_BAD_ARG` | path 格式 / CTA 名称 / where 值非法 |
 | `E_NOT_FOUND` | path 在 DOM 中找不到 / 按钮不可见 |
 | `E_UI_MISMATCH` | DOM 结构偏离预期（tree 根没找到、switcher 缺失等） |
@@ -100,7 +126,7 @@ node outline-cli.js cta 返回首页 --confirm         # 破坏性：必须 --co
 
 ## CLI 速查
 
-```
+```text
 outline-cli doctor                        连通性 + 注入 + probe + state
 outline-cli tree [--json]                 打印提纲
 outline-cli find "<kw>"                   节点文本 contains 查找
@@ -127,6 +153,7 @@ outline-cli cta 返回首页 --confirm        必须显式 --confirm
 公共 option：
 
 - `--tab <id>`：跳过自动发现，指定 tab id
+- `--driver <name>`：选择 `playwright` 或 `jseyes`；默认 `playwright`
 - `--json`：结构化输出（`tree` / `find` / 写命令调试）
 - `--deep`：`expand` 递归
 - `--confirm`：仅破坏性 `cta`（`生成全文` / `返回首页`）需要
@@ -163,15 +190,30 @@ node outline-cli.js cta 下载提纲
 5. **page-world 调用有 3s 超时**：`runInPage` 硬编码 3000ms，正常写操作远低于此；若 React 重渲异常长可能触发 `E_TIMEOUT`。
 6. **path 随增删变化**：写操作串联时每步重新 `find` / `tree`，别缓存。
 
+## Driver 架构
+
+当前实现拆成两层：
+
+- `outline-bridge.js`：只负责页内 DOM / React / CTA 逻辑。
+- `lib/session.js` + `lib/drivers/*`：负责目标页发现、脚本执行、bridge 注入和 CLI 编排。
+
+默认 driver：
+
+- `playwright`：通过 Chromium CDP 附着到现有浏览器会话，适合脱离 `js-eyes` 使用。
+
+兼容 driver：
+
+- `jseyes`：保留原先的 Firefox + 扩展 + 本地 server 路径。
+
 ## 内部实现说明
 
-- 桥接以 IIFE 表达式被 `executeScript` eval，末尾 `return JSON.stringify({...})`；CLI 自动 parse。
-- CLI 每次命令都会 `ensureBridge()`：读 `outline-bridge.js` 里 `const VERSION = '0.7.0'` 和页面里 `window.__jse_outline__.__meta.version` 比对，不一致即重注。改代码 + bump 版本即热更。
+- 桥接以 IIFE 表达式被驱动层 `evaluate`，末尾 `return JSON.stringify({...})`；CLI 侧自动 parse。
+- CLI 每次命令都会 `ensureBridge()`：读 `outline-bridge.js` 里 `const VERSION = '0.7.1'` 和页面里 `window.__jse_outline__.__meta.version` 比对，不一致即重注。改代码 + bump 版本即热更。
 - 所有写操作走统一的 page-world 通道：
   1. 在目标元素上 `setAttribute('data-jse-op', token)`。
   2. `<script>` 注入 payload，payload 里 `document.querySelector('[data-jse-op="…"]')` 找回元素 → 拿 `__reactFiber$` → 沿 `.return` 最多 40 层找首个同时带 `onEditNode` 和 `item` 的 fiber（即 `Z` 组件）。
   3. 调 handler，`window.__JSE_OUTLINE_RET__ = JSON.stringify(result)`。
-  4. content-script 端轮询 `window.wrappedJSObject.__JSE_OUTLINE_RET__`，parse 后返回。
+  4. 驱动执行上下文取回 `window.__JSE_OUTLINE_RET__`，parse 后返回。
   5. finally 里 `removeAttribute('data-jse-op')`。
 - CTA / switcher 走同样的 page-world 通道，区别是直接拿 `__reactProps$.onClick` 而不需要爬 fiber 链。
 - `unwrap(x)` = `x.wrappedJSObject ?? x`；Chrome 下没有 `wrappedJSObject`，天然回落为 `x`，跨浏览器兼容。

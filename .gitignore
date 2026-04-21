@@ -29,6 +29,8 @@ build/
 .cache/
 .tmp/
 
+.chrome-cdp-profile/
+
 # Lockfiles (项目里没有,保留给将来)
 # package-lock.json
 # yarn.lock
